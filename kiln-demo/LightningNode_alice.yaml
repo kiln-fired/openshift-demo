@@ -1,0 +1,23 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningNode
+metadata:
+  name: alice
+spec:
+  image:
+    lndImage: 'quay.io/kiln-fired/lnd:latest'
+    lndInitImage: 'docker.io/lightninglabs/lndinit:v0.1.8-beta-lnd-v0.15.5-beta'
+  bitcoinConnection:
+    apiAuthSecretName: btcd-rpc-creds
+    apiPasswordSecretKey: password
+    apiUserSecretKey: username
+    certSecret: simnet-node-rpc-tls
+    host: simnet-node
+    network: simnet
+  wallet:
+    password:
+      secretKey: password
+      secretName: alice-wallet-lock
+    seed:
+      menomicKey: mnemonic
+      passphraseKey: passphrase
+      secretName: alice-seed

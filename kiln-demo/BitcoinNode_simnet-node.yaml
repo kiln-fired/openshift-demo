@@ -1,0 +1,19 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: BitcoinNode
+metadata:
+  name: simnet-node
+spec:
+  image:
+    btcdImage: 'quay.io/kiln-fired/btcd:latest'
+    btcdTimerImage: 'quay.io/kiln-fired/btcd:latest'
+  mining:
+    cpuMiningEnabled: false
+    rewardAddress:
+      secretName: alice-rewards
+    minBlocks: 400
+    secondsPerBlock: 10
+  rpcServer:
+    certSecret: simnet-node-rpc-tls
+    apiAuthSecretName: btcd-rpc-creds
+    apiUserSecretKey: username
+    apiPasswordSecretKey: password

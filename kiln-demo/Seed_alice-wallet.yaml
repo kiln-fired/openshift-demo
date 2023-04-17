@@ -1,0 +1,12 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: Seed
+metadata:
+  name: alice
+spec:
+  mnemonic: >-
+    above pioneer library glimpse exhibit analyst monitor holiday boil art
+    ketchup mail hunt since now pattern vacant arch museum tourist brisk come
+    pilot devote
+  network: simnet
+  passphrase: test
+  secretName: alice-seed
