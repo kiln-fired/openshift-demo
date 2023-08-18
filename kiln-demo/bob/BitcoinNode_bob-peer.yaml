@@ -1,0 +1,17 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: BitcoinNode
+metadata:
+  name: bob-peer
+spec:
+  image:
+    btcdImage: 'quay.io/kiln-fired/btcd:latest'
+  mining:
+    cpuMiningEnabled: false
+    rewardAddress:
+      secretName: alice-address
+  rpcServer:
+    certSecret: bob-peer-rpc-tls
+    apiAuthSecretName: bob-peer-rpc-creds
+    apiUserSecretKey: username
+    apiPasswordSecretKey: password
+  peer: 'miner:18555'

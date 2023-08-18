@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bob-peer-rpc-tls
+spec:
+  secretName: bob-peer-rpc-tls
+  issuerRef:
+    name: cluster-issuer
+    kind: ClusterIssuer
+  commonName: bob-peer
+  usages:
+    - server auth
+  dnsNames:
+  - bob-peer
+  - bob-peer.kiln-demo.svc
+  - bob-peer.kiln-demo.svc.cluster.local
+  - localhost
+  keyEncoding: pkcs8

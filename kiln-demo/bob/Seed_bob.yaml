@@ -1,0 +1,7 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: Seed
+metadata:
+  name: bob
+spec:
+  network: simnet
+  secretName: bob-seed
