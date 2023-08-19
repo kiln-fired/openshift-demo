@@ -15,6 +15,6 @@ spec:
     secondsPerBlock: 10
   rpcServer:
     certSecret: miner-rpc-tls
-    apiAuthSecretName: btcd-rpc-creds
+    apiAuthSecretName: miner-rpc-creds
     apiUserSecretKey: username
     apiPasswordSecretKey: password
