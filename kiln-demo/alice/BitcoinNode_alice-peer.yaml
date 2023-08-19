@@ -5,10 +5,6 @@ metadata:
 spec:
   image:
     btcdImage: 'quay.io/kiln-fired/btcd:latest'
-  mining:
-    cpuMiningEnabled: false
-    rewardAddress:
-      secretName: alice-address
   rpcServer:
     certSecret: alice-peer-rpc-tls
     apiAuthSecretName: alice-peer-rpc-creds
