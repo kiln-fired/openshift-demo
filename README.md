@@ -1,112 +1,207 @@
-# Kiln Demo for OpenShift Container Platform
+# Kiln on OpenShift
+
+A repeatable demo of [Kiln](https://github.com/kiln-fired/kiln-operator) running Bitcoin and Lightning infrastructure on Red Hat OpenShift.
+
+The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough funds Alice, opens a Lightning channel, pays Bob, replaces Alice's pod, then deletes and recreates Alice's `LightningNode` while proving that her identity and PVC survive.
+
+> [!WARNING]
+> This is a development demo. It uses simnet, demo passwords, a known Alice seed, and automatic block generation. Never reuse these credentials or seed material for real funds.
+
+## Architecture
+
+```text
+                         OpenShift
+┌───────────────────────────────────────────────────────┐
+│ kiln-demo                                             │
+│                                                       │
+│  ┌──────────────────┐                                 │
+│  │ BitcoinNode/btcd │                                 │
+│  │ btcd + PVC       │                                 │
+│  └────────┬─────────┘                                 │
+│           │ nodeRef                                   │
+│     ┌─────┴───────────────┐                           │
+│     ▼                     ▼                           │
+│ ┌──────────────┐      ┌──────────────┐                │
+│ │ Alice / LND  │◄────►│ Bob / LND    │                │
+│ │ retained PVC │  LN  │ retained PVC │                │
+│ └──────────────┘      └──────────────┘                │
+└───────────────────────────────────────────────────────┘
+```
+
+## What it demonstrates
+
+- declarative Bitcoin and Lightning resources
+- `LightningNode.spec.bitcoinConnection.nodeRef`
+- persistent Bitcoin and Lightning storage
+- authenticated LND runtime readiness
+- restricted LND RPC credential publication
+- Lightning identity survival across pod replacement
+- retained LND state across CR deletion and recreation
+- OpenShift security configuration without granting the namespace broad `anyuid`
 
 ## Prerequisites
 
-1. An OpenShift v4 or OKD cluster. [CRC](https://github.com/crc-org/crc) is a great way to run one locally.
-1. The [OperatorSDK](https://sdk.operatorframework.io/docs/installation/) for installing a Kiln Operator release on you cluster
+- OpenShift 4.x or OKD with cluster-admin access
+- `oc`
+- `operator-sdk`
+- `openssl`
+- `jq`
+- access to public images and `quay.io/kiln-fired/kiln-operator-bundle:latest`
 
-## Provisioning the demo
+Confirm access:
 
-### Install the Kiln Operator
+```shell
+oc whoami
+oc version
+```
 
-1. Create a namespace for the Kiln Operator
+## Fast path
 
-   `oc new-project kiln-operator`
+```shell
+./scripts/install.sh
+./scripts/walkthrough.sh
+```
 
-1. Deploy the Kiln Operator using the Operator SDK
+The install script installs the current Kiln bundle when its CRDs are absent, configures the OpenShift SCC required by Kiln's current fixed UID/GID, creates demo credentials and btcd TLS material, creates seeds, and waits for btcd, Alice, and Bob to report `Ready`.
 
-   `operator-sdk run bundle --install-mode AllNamespaces -n kiln-operator quay.io/kiln-fired/kiln-operator-bundle:latest -n kiln-operator`
+## Walkthrough
 
-### Prepare x509 Issuers
+### 1. Provision the environment
 
-1. Go to the OperatorHub and install the cert-manager Operator for Red Hat OpenShift and configure it to watch all namespaces.
+```shell
+./scripts/install.sh
+oc get bitcoinnodes,lightningnodes,pods,pvc -n kiln-demo
+```
 
-1. Apply the certificate manifest to your target namespace.
+Inspect Kiln's authenticated runtime view:
 
-   `oc apply -f openshift-cert-manager/ -n openshift-cert-manager`
+```shell
+oc get lightningnode alice -n kiln-demo -o yaml
+oc get lightningnode bob -n kiln-demo -o yaml
+```
 
-1. The root CA that will be used to issue x509 certificates for RPC endpoints is now stored in a secret called `rootca`.
+Look at `status.phase`, `status.rpcAddress`, `status.rpcSecretName`, and `status.runtime.identityPubkey`.
 
-   Verify that the secret exists and contains 3 keys (this may take a minute or two):
+### 2. Show Alice's simnet balance
 
-   `oc describe secret rootca -n openshift-cert-manager`
+```shell
+oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet walletbalance
+```
 
-### Deploy the Demo
+The demo directs initial simnet mining rewards to an address derived from Alice's development-only seed. btcd generates 400 blocks at startup and then a block every 10 seconds so channel transactions confirm during the demo.
 
-1. Create a namespace for the Kiln demo.
+### 3. Connect Alice to Bob
 
-   `oc new-project kiln-demo`
+```shell
+BOB_KEY="$(oc exec -n kiln-demo bob-0 -c lnd --   lncli --lnddir=/data --network=simnet getinfo | jq -r .identity_pubkey)"
 
-1. Provision the mining node
+oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet connect "$BOB_KEY@bob:9735"
+```
 
-   `oc apply -f kiln-demo/miner`
+### 4. Open a channel
 
-1. Provision Alice's nodes
+```shell
+oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet   openchannel --node_key="$BOB_KEY" --local_amt=1000000
+```
 
-   `oc apply -f kiln-demo/alice`
+After a periodic block confirms it:
 
-1. Provision Bob's nodes
+```shell
+oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet listchannels
+```
 
-   `oc apply -f kiln-demo/bob`
+### 5. Pay Bob
 
-## Sample Channel and Transaction Script
+```shell
+INVOICE="$(oc exec -n kiln-demo bob-0 -c lnd --   lncli --lnddir=/data --network=simnet addinvoice --amt=10000 |
+  jq -r .payment_request)"
 
-1. The following output should match the `alice-address` secret:
+oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet payinvoice --force "$INVOICE"
+```
 
-   `alice$ lncli --network simnet newaddress np2wkh`
+Show both channel balances:
 
-1. The follow should produce an expected output of 0:
+```shell
+oc exec -n kiln-demo alice-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
+oc exec -n kiln-demo bob-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
+```
 
-   `alice$ lncli --network simnet getwalletbalance`
+### 6. Prove pod recovery
 
-1. The following will speed up coinbase maturity for Alice's block rewards: 
+```shell
+ALICE_KEY="$(oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identityPubkey}')"
 
-   `miner$ ./start-btcctl generate 100`
+oc delete pod alice-0 -n kiln-demo
+oc wait -n kiln-demo pod/alice-0 --for=condition=Ready --timeout=180s
+oc wait -n kiln-demo lightningnode/alice --for=condition=Ready --timeout=180s
 
-1. Now Alice should have a balance:
+oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identityPubkey}{"\n"}'
+```
 
-   `alice$ lncli --network simnet getwalletbalance`
+The identity should match `$ALICE_KEY`.
 
-1. Get Bob's public key:
+### 7. Prove CR recovery
 
-   `bob$ lncli --network=simnet getinfo`
+```shell
+PVC=lnd-data-alice-0
+oc get pvc "$PVC" -n kiln-demo -o jsonpath='{.metadata.uid}{"\n"}'
 
-1. Connect Alice to Bob:
+oc delete -f manifests/lightning/alice.yaml --wait=true
+oc get pvc "$PVC" -n kiln-demo
 
-   `alice$ lncli --network=simnet connect <bob_pubkey>@bob`
+oc apply -f manifests/lightning/alice.yaml
+oc wait -n kiln-demo lightningnode/alice --for=condition=Ready --timeout=300s
+```
 
-1. The following should show Bob's node:
+The same PVC and Alice identity should return.
 
-   `alice$ lncli --network=simnet listpeers`
+### 8. Run it all automatically
 
-1. Open a channel with Bob:
+```shell
+./scripts/walkthrough.sh
+```
 
-   `alice$ lncli --network=simnet openchannel --node_key=<bob_pubkey> --local_amt=1000000`
+The script fails if the payment does not complete or if Alice's identity/PVC changes.
 
-1. The following should show Bob's channel:
+## OpenShift security note
 
-   `alice$ lncli --network=simnet listchannels`
+Kiln currently pins btcd and LND containers to UID/GID `65532`. OpenShift's default restricted SCC normally assigns a namespace-specific UID. This demo creates a dedicated SCC that permits only UID/GID `65532` and binds it only to the service accounts used by the demo.
 
-1. Get an invoice from Bob:
+It does **not** grant the namespace `anyuid`.
 
-   `bob$ lncli --network=simnet addinvoice --amt=10000`
+## Repository layout
 
-1. Pay the invoice:
+```text
+manifests/
+  bitcoin/
+  lightning/
+  seeds/
+  demo/
+openshift/
+  kiln-demo-scc.yaml
+  scc-bindings.yaml
+scripts/
+  install.sh
+  walkthrough.sh
+  cleanup.sh
+```
 
-   `alice$ lncli --network=simnet sendpayment --pay_req=<encoded_invoice>`
+## Cleanup
 
-1. Bob should have a channel balance
+```shell
+./scripts/cleanup.sh
+```
 
-   `alice+bob$ lncli --network=simnet channelbalance`
+The operator is intentionally left installed for another demo.
 
-1. Retreive channel point
+## Current Kiln baseline
 
-   `alice$ lncli --network=simnet listchannels`
+This repo now follows the current Kiln runtime instead of the 2023 image set:
 
-1. Close the channel
-
-   `alice$ lncli --network=simnet closechannel --funding_txid=<funding_txid> --output_index=<output_index>`
-
-1. The following should show a balance for Bob:
-
-   `alice+bob$ lncli --network=simnet walletbalance`
+- btcd `v0.26.2`
+- LND `v0.21.0-beta`
+- lndinit `v0.1.36-beta-lnd-v0.21.0-beta`
+- simnet by default
+- shared `BitcoinNode` dependency through `nodeRef`
+- retained Lightning PVC lifecycle
+- restricted RPC credential publication
