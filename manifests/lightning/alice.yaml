@@ -1,0 +1,19 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningNode
+metadata:
+  name: alice
+  namespace: kiln-demo
+spec:
+  bitcoinConnection:
+    nodeRef: btcd
+    network: simnet
+  rpc:
+    secretName: alice-rpc
+  wallet:
+    password:
+      secretName: alice-wallet
+      secretKey: password
+    seed:
+      secretName: alice-seed
+      mnemonicKey: mnemonic
+      passphraseKey: passphrase
