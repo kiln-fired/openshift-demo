@@ -1,0 +1,19 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningNode
+metadata:
+  name: bob
+  namespace: kiln-demo
+spec:
+  bitcoinConnection:
+    nodeRef: btcd
+    network: simnet
+  rpc:
+    secretName: bob-rpc
+  wallet:
+    password:
+      secretName: bob-wallet
+      secretKey: password
+    seed:
+      secretName: bob-seed
+      mnemonicKey: mnemonic
+      passphraseKey: passphrase

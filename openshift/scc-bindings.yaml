@@ -1,0 +1,41 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kiln-demo-scc-default
+  namespace: kiln-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:kiln-demo
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: kiln-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kiln-demo-scc-alice
+  namespace: kiln-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:kiln-demo
+subjects:
+  - kind: ServiceAccount
+    name: alice-rpc-publisher
+    namespace: kiln-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kiln-demo-scc-bob
+  namespace: kiln-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:kiln-demo
+subjects:
+  - kind: ServiceAccount
+    name: bob-rpc-publisher
+    namespace: kiln-demo

@@ -1,20 +1,20 @@
 apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
 kind: BitcoinNode
 metadata:
-  name: miner
+  name: btcd
+  namespace: kiln-demo
 spec:
-  image:
-    btcdImage: 'quay.io/kiln-fired/btcd:latest'
-    btcdTimerImage: 'quay.io/kiln-fired/btcd:latest'
+  network: simnet
   mining:
     cpuMiningEnabled: false
     rewardAddress:
-      secretName: alice-address
+      secretName: alice-reward-address
+      secretKey: np2wkhAddress
     minBlocks: 400
     periodicBlocksEnabled: true
     secondsPerBlock: 10
   rpcServer:
-    certSecret: miner-rpc-tls
-    apiAuthSecretName: miner-rpc-creds
+    certSecret: btcd-rpc-tls
+    apiAuthSecretName: btcd-rpc-creds
     apiUserSecretKey: username
     apiPasswordSecretKey: password
