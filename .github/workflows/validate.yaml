@@ -1,0 +1,33 @@
+name: Validate demo
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+      - name: Validate YAML syntax
+        run: |
+          python -m pip install --disable-pip-version-check pyyaml
+          python - <<'PY'
+          import glob
+          import yaml
+
+          files = glob.glob("manifests/**/*.yaml", recursive=True)
+          files += glob.glob("openshift/*.yaml")
+          files += glob.glob(".github/workflows/*.yaml")
+          for path in files:
+              with open(path, encoding="utf-8") as stream:
+                  list(yaml.safe_load_all(stream))
+              print(f"ok {path}")
+          PY
