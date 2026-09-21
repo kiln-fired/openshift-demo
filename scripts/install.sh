@@ -47,7 +47,7 @@ oc create secret generic bob-wallet -n "$NAMESPACE"   --from-literal=password=ki
 echo "==> Creating seed Secrets"
 # Alice's existing fixture is intentionally retained because its known simnet
 # wallet corresponds to the public reward address used by this demo.
-oc apply -f kiln-demo/alice/Seed_alice.yaml
+oc apply -n "$NAMESPACE" -f kiln-demo/alice/Seed_alice.yaml
 oc apply -f manifests/seeds/bob.yaml
 oc apply -f manifests/demo/alice-reward-address.yaml
 
