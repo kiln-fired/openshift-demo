@@ -25,7 +25,7 @@ else
 fi
 
 echo "==> Waiting for Kiln APIs"
-for crd in   bitcoinnodes.bitcoin.kiln-fired.github.io   lightningnodes.bitcoin.kiln-fired.github.io   seeds.bitcoin.kiln-fired.github.io; do
+for crd in   bitcoinnodes.bitcoin.kiln-fired.github.io   lightningnodes.bitcoin.kiln-fired.github.io   lightningpeers.bitcoin.kiln-fired.github.io   lightningchannels.bitcoin.kiln-fired.github.io   seeds.bitcoin.kiln-fired.github.io; do
   oc wait --for=condition=Established "crd/$crd" --timeout=120s
 done
 
@@ -70,7 +70,7 @@ oc wait -n "$NAMESPACE" lightningnode/bob --for=condition=Ready --timeout=300s
 
 echo
 echo "Kiln demo is ready."
-oc get bitcoinnodes,lightningnodes -n "$NAMESPACE"
+oc get bitcoinnodes,lightningnodes,lightningpeers,lightningchannels -n "$NAMESPACE"
 oc get pods,pvc -n "$NAMESPACE"
 echo
 echo "Next: ./scripts/walkthrough.sh"

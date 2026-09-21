@@ -2,7 +2,7 @@
 
 A repeatable demo of [Kiln](https://github.com/kiln-fired/kiln-operator) running Bitcoin and Lightning infrastructure on Red Hat OpenShift.
 
-The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough funds Alice, opens a Lightning channel, pays Bob, replaces Alice's pod, then deletes and recreates Alice's `LightningNode` while proving that her identity and PVC survive.
+The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough then declares Alice-to-Bob connectivity with a `LightningPeer`, declares the funded relationship with a `LightningChannel`, pays Bob through LND, replaces Alice's pod, and finally deletes/recreates Alice's `LightningNode` while proving that her identity, PVC, and Kiln-owned channel survive.
 
 > [!WARNING]
 > This is a development demo. It uses simnet, demo passwords, a known Alice seed, and automatic block generation. Never reuse these credentials or seed material for real funds.
@@ -22,16 +22,28 @@ The demo provisions one persistent btcd `BitcoinNode` on simnet and two persiste
 │     ┌─────┴───────────────┐                           │
 │     ▼                     ▼                           │
 │ ┌──────────────┐      ┌──────────────┐                │
-│ │ Alice / LND  │◄────►│ Bob / LND    │                │
-│ │ retained PVC │  LN  │ retained PVC │                │
-│ └──────────────┘      └──────────────┘                │
+│ │ Alice / LND  │      │ Bob / LND    │                │
+│ │ retained PVC │      │ retained PVC │                │
+│ └──────┬───────┘      └──────────────┘                │
+│        │ nodeRef                                       │
+│        ▼                                               │
+│ ┌──────────────────┐                                   │
+│ │ LightningPeer/bob│                                   │
+│ └────────┬─────────┘                                   │
+│          │ peerRef                                     │
+│          ▼                                             │
+│ ┌─────────────────────────┐                            │
+│ │ LightningChannel/       │                            │
+│ │ alice-to-bob            │                            │
+│ └─────────────────────────┘                            │
 └───────────────────────────────────────────────────────┘
 ```
 
 ## What it demonstrates
 
 - declarative Bitcoin and Lightning resources
-- `LightningNode.spec.bitcoinConnection.nodeRef`
+- immediate-resource API references: `LightningNode → BitcoinNode →` runtime dependency, `LightningPeer → LightningNode`, and `LightningChannel → LightningPeer`
+- managed Lightning network/RPC configuration derived from `bitcoinConnection.nodeRef`
 - persistent Bitcoin and Lightning storage
 - authenticated LND runtime readiness
 - restricted LND RPC credential publication
@@ -90,25 +102,38 @@ oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet w
 
 The demo directs initial simnet mining rewards to an address derived from Alice's development-only seed. btcd generates 400 blocks at startup and then a block every 10 seconds so channel transactions confirm during the demo.
 
-### 3. Connect Alice to Bob
+### 3. Declare Alice-to-Bob connectivity
 
-```shell
-BOB_KEY="$(oc exec -n kiln-demo bob-0 -c lnd --   lncli --lnddir=/data --network=simnet getinfo | jq -r .identity_pubkey)"
+The walkthrough resolves Bob's LND pubkey, then creates a first-class `LightningPeer/bob`:
 
-oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet connect "$BOB_KEY@bob:9735"
+```yaml
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningPeer
+spec:
+  nodeRef: alice
+  pubkey: <Bob identity pubkey>
+  address: bob.kiln-demo.svc.cluster.local:9735
 ```
 
-### 4. Open a channel
+Kiln observes LND and reconciles the connection. The demo waits for `LightningPeer.Ready=True`.
 
-```shell
-oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet   openchannel --node_key="$BOB_KEY" --local_amt=1000000
+### 4. Declare a channel
+
+The channel references only its immediate dependency, the peer:
+
+```yaml
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningChannel
+metadata:
+  name: alice-to-bob
+spec:
+  peerRef: bob
+  capacitySats: 1000000
+  private: true
+  minConfs: 1
 ```
 
-After a periodic block confirms it:
-
-```shell
-oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet listchannels
-```
+Kiln owns the funding lifecycle and reports the resulting channel point in status. The walkthrough waits for `LightningChannel.Ready=True` and verifies the same channel survives later node recovery.
 
 ### 5. Pay Bob
 
@@ -161,7 +186,7 @@ The same PVC and Alice identity should return.
 ./scripts/walkthrough.sh
 ```
 
-The script fails if the payment does not complete or if Alice's identity/PVC changes.
+The script fails if the peer or channel CR does not reconcile, the payment does not complete, or Alice's identity, PVC, or Kiln-owned channel identity changes across recovery.
 
 ## OpenShift security note
 
@@ -202,6 +227,8 @@ This repo now follows the current Kiln runtime instead of the 2023 image set:
 - LND `v0.21.0-beta`
 - lndinit `v0.1.36-beta-lnd-v0.21.0-beta`
 - simnet by default
-- shared `BitcoinNode` dependency through `nodeRef`
+- managed `LightningNode` network/RPC configuration derived through `bitcoinConnection.nodeRef`
+- first-class `LightningPeer` and `LightningChannel` desired state
+- `LightningChannel.peerRef` as the single channel dependency reference
 - retained Lightning PVC lifecycle
 - restricted RPC credential publication

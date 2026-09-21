@@ -21,7 +21,7 @@ oc wait -n "$NAMESPACE" lightningnode/bob --for=condition=Ready --timeout=60s
 
 echo
 echo "==> Kiln runtime status"
-oc get bitcoinnodes,lightningnodes -n "$NAMESPACE"
+oc get bitcoinnodes,lightningnodes,lightningpeers,lightningchannels -n "$NAMESPACE"
 oc get lightningnode alice -n "$NAMESPACE"   -o jsonpath='Alice: {.status.runtime.identityPubkey}{" blocks="}{.status.runtime.blockHeight}{" peers="}{.status.runtime.numPeers}{"\n"}'
 oc get lightningnode bob -n "$NAMESPACE"   -o jsonpath='Bob:   {.status.runtime.identityPubkey}{" blocks="}{.status.runtime.blockHeight}{" peers="}{.status.runtime.numPeers}{"\n"}'
 
@@ -34,26 +34,40 @@ echo "==> Alice wallet balance"
 lncli alice walletbalance
 
 echo
-echo "==> Connecting Alice to Bob"
-if ! lncli alice listpeers | jq -e --arg pub "$BOB_KEY" '.peers[]? | select(.pub_key == $pub)' >/dev/null; then
-  lncli alice connect "$BOB_KEY@bob:9735"
-else
-  echo "Alice is already connected to Bob"
-fi
+echo "==> Declaring Alice -> Bob peer connectivity"
+cat <<EOF | oc apply -f -
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningPeer
+metadata:
+  name: bob
+  namespace: $NAMESPACE
+spec:
+  nodeRef: alice
+  pubkey: $BOB_KEY
+  address: bob.$NAMESPACE.svc.cluster.local:9735
+EOF
+oc wait -n "$NAMESPACE" lightningpeer/bob --for=condition=Ready --timeout=180s
+oc get lightningpeer bob -n "$NAMESPACE"
 
 echo
-echo "==> Opening a 1,000,000 sat channel"
-if [[ "$(lncli alice listchannels | jq '.channels | length')" -eq 0 ]]; then
-  lncli alice openchannel --node_key="$BOB_KEY" --local_amt=1000000
-  echo "Waiting for a periodic simnet block to confirm the channel..."
-  for _ in {1..30}; do
-    [[ "$(lncli alice listchannels | jq '.channels | length')" -gt 0 ]] && break
-    sleep 5
-  done
-fi
+echo "==> Declaring a 1,000,000 sat channel"
+cat <<EOF | oc apply -f -
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: LightningChannel
+metadata:
+  name: alice-to-bob
+  namespace: $NAMESPACE
+spec:
+  peerRef: bob
+  capacitySats: 1000000
+  private: true
+  minConfs: 1
+EOF
+oc wait -n "$NAMESPACE" lightningchannel/alice-to-bob --for=condition=Ready --timeout=240s
 
-CHANNEL_COUNT="$(lncli alice listchannels | jq '.channels | length')"
-[[ "$CHANNEL_COUNT" -gt 0 ]] || { echo "Channel did not become active" >&2; exit 1; }
+CHANNEL_POINT="$(oc get lightningchannel alice-to-bob -n "$NAMESPACE" -o jsonpath='{.status.channelPoint}')"
+[[ -n "$CHANNEL_POINT" ]] || { echo "LightningChannel did not report a channel point" >&2; exit 1; }
+oc get lightningpeer,lightningchannel -n "$NAMESPACE"
 lncli alice listchannels
 
 echo
@@ -100,6 +114,9 @@ oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=Ready --timeout=300s
 
 ALICE_KEY_AFTER_CR="$(lncli alice getinfo | jq -r .identity_pubkey)"
 PVC_UID_AFTER_CR="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
+oc wait -n "$NAMESPACE" lightningpeer/bob --for=condition=Ready --timeout=180s
+oc wait -n "$NAMESPACE" lightningchannel/alice-to-bob --for=condition=Ready --timeout=180s
+CHANNEL_POINT_AFTER_CR="$(oc get lightningchannel alice-to-bob -n "$NAMESPACE" -o jsonpath='{.status.channelPoint}')"
 
 [[ "$ALICE_KEY_AFTER_CR" == "$ALICE_KEY" ]] || {
   echo "Alice identity changed after LightningNode recreation" >&2
@@ -109,11 +126,17 @@ PVC_UID_AFTER_CR="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.ui
   echo "Alice PVC changed after LightningNode recreation" >&2
   exit 1
 }
+[[ "$CHANNEL_POINT_AFTER_CR" == "$CHANNEL_POINT" ]] || {
+  echo "Kiln-managed channel identity changed after LightningNode recreation" >&2
+  exit 1
+}
 
 echo
 echo "Demo complete."
 echo "  Alice identity: $ALICE_KEY_AFTER_CR"
 echo "  Alice PVC UID:  $PVC_UID_AFTER_CR"
+echo "  Lightning peer CR: reconciled"
+echo "  Lightning channel CR: $CHANNEL_POINT_AFTER_CR"
 echo "  Lightning payment: successful"
 echo "  Pod recovery: successful"
 echo "  CR recovery: successful"
