@@ -4,6 +4,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-kiln-demo}"
 OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-kiln-operator}"
 BUNDLE_IMG="${BUNDLE_IMG:-quay.io/kiln-fired/kiln-operator-bundle:latest}"
+BITCOIN_RESOURCE="btcd-bitcoin"
 
 for cmd in oc operator-sdk openssl jq; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
@@ -33,7 +34,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 echo "==> Creating btcd RPC TLS material"
-openssl req -x509 -newkey rsa:2048 -nodes -days 7   -keyout "$tmpdir/tls.key"   -out "$tmpdir/tls.crt"   -subj "/CN=btcd.$NAMESPACE.svc.cluster.local"   -addext "subjectAltName=DNS:btcd,DNS:btcd.$NAMESPACE.svc,DNS:btcd.$NAMESPACE.svc.cluster.local"   >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 7   -keyout "$tmpdir/tls.key"   -out "$tmpdir/tls.crt"   -subj "/CN=$BITCOIN_RESOURCE.$NAMESPACE.svc.cluster.local"   -addext "subjectAltName=DNS:$BITCOIN_RESOURCE,DNS:$BITCOIN_RESOURCE.$NAMESPACE.svc,DNS:$BITCOIN_RESOURCE.$NAMESPACE.svc.cluster.local"   >/dev/null 2>&1
 
 oc create secret generic btcd-rpc-tls -n "$NAMESPACE"   --from-file=tls.crt="$tmpdir/tls.crt"   --from-file=tls.key="$tmpdir/tls.key"   --from-file=ca.crt="$tmpdir/tls.crt"   --dry-run=client -o yaml | oc apply -f -
 
