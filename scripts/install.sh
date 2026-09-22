@@ -45,17 +45,47 @@ oc create secret generic alice-wallet -n "$NAMESPACE"   --from-literal=password=
 oc create secret generic bob-wallet -n "$NAMESPACE"   --from-literal=password=kiln-demo-bob-password   --dry-run=client -o yaml | oc apply -f -
 
 echo "==> Creating seed Secrets"
-# Alice's existing fixture is intentionally retained because its known simnet
-# wallet corresponds to the public reward address used by this demo.
-oc apply -n "$NAMESPACE" -f kiln-demo/alice/Seed_alice.yaml
+# Alice uses a known public simnet fixture because the demo reward address is
+# tied to that wallet. Materialize it as a Kubernetes Secret first; the Seed CR
+# contains only Secret references.
+ALICE_FIXTURE="fixtures/alice-seed-material.yaml"
+awk '
+  /^  mnemonic: >-$/ { reading=1; next }
+  reading && /^  network:/ { exit }
+  reading {
+    sub(/^    /, "")
+    printf "%s%s", separator, $0
+    separator=" "
+  }
+  END { if (reading) printf "\n" }
+' "$ALICE_FIXTURE" >"$tmpdir/alice-mnemonic"
+awk '
+  /^  passphrase:/ {
+    sub(/^  passphrase:[[:space:]]*/, "")
+    print
+    exit
+  }
+' "$ALICE_FIXTURE" >"$tmpdir/alice-passphrase"
+
+[[ -s "$tmpdir/alice-mnemonic" && -s "$tmpdir/alice-passphrase" ]] || {
+  echo "Could not read Alice seed fixture" >&2
+  exit 1
+}
+
+oc create secret generic alice-seed-import -n "$NAMESPACE" \
+  --from-file=mnemonic="$tmpdir/alice-mnemonic" \
+  --from-file=passphrase="$tmpdir/alice-passphrase" \
+  --dry-run=client -o yaml | oc apply -f -
+
+oc apply -f manifests/seeds/alice.yaml
 oc apply -f manifests/seeds/bob.yaml
 oc apply -f manifests/demo/alice-reward-address.yaml
 
+for seed in alice bob; do
+  oc wait -n "$NAMESPACE" "seed/$seed" --for=condition=Ready --timeout=120s
+done
+
 for secret in alice-seed bob-seed; do
-  for _ in {1..60}; do
-    oc get secret "$secret" -n "$NAMESPACE" >/dev/null 2>&1 && break
-    sleep 2
-  done
   oc get secret "$secret" -n "$NAMESPACE" >/dev/null
 done
 
