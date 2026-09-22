@@ -2,7 +2,7 @@
 
 A repeatable demo of [Kiln](https://github.com/kiln-fired/kiln-operator) running Bitcoin and Lightning infrastructure on Red Hat OpenShift.
 
-The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough then declares Alice-to-Bob connectivity with a `LightningPeer`, declares the funded relationship with a `LightningChannel`, pays Bob through LND, replaces Alice's pod, and finally deletes/recreates Alice's `LightningNode` while proving that her identity, PVC, and Kiln-owned channel survive.
+The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough then declares Alice-to-Bob connectivity with a `LightningPeer`, declares the funded relationship with a `LightningChannel`, waits for Alice's retained Static Channel Backup (SCB), pays Bob through LND, replaces Alice's pod, and finally deletes/recreates Alice's `LightningNode` while proving that her identity, PVC, retained SCB Secret, and Kiln-owned channel survive.
 
 > [!WARNING]
 > This is a development demo. It uses simnet, demo passwords, a known Alice seed, and automatic block generation. Never reuse these credentials or seed material for real funds.
@@ -25,6 +25,9 @@ The demo provisions one persistent btcd `BitcoinNode` on simnet and two persiste
 │ │ Alice / LND  │      │ Bob / LND    │                │
 │ │ retained PVC │      │ retained PVC │                │
 │ └──────┬───────┘      └──────────────┘                │
+│        │                                               │
+│        └──────────────► Secret/alice-scb               │
+│                         retained SCB                    │
 │        │ nodeRef                                       │
 │        ▼                                               │
 │ ┌──────────────────┐                                   │
@@ -49,6 +52,8 @@ The demo provisions one persistent btcd `BitcoinNode` on simnet and two persiste
 - restricted LND RPC credential publication
 - Lightning identity survival across pod replacement
 - retained LND state across CR deletion and recreation
+- retained LND Static Channel Backup publication outside the Lightning PVC
+- SCB survival across pod replacement and complete `LightningNode` deletion/recreation
 - OpenShift security configuration without granting the namespace broad `anyuid`
 
 ## Prerequisites
@@ -133,9 +138,22 @@ spec:
   minConfs: 1
 ```
 
-Kiln owns the funding lifecycle and reports the resulting channel point in status. The walkthrough waits for `LightningChannel.Ready=True` and verifies the same channel survives later node recovery.
+Kiln owns the funding lifecycle and reports the resulting channel point in status. The walkthrough waits for `LightningChannel.Ready=True`, then waits for `LightningNode.BackupReady=True` and verifies the retained `alice-scb` Secret contains LND's native `channel.backup`.
 
-### 5. Pay Bob
+The SCB Secret intentionally has no `LightningNode` owner reference, so it is not garbage-collected when Alice's CR is deleted. It is a recovery artifact, not a replacement for seed custody or independent off-cluster backup storage.
+
+### 5. Inspect Alice's retained Static Channel Backup
+
+```shell
+oc wait -n kiln-demo lightningnode/alice --for=condition=BackupReady --timeout=180s
+
+oc get secret alice-scb -n kiln-demo \
+  -o jsonpath='{.metadata.uid}{"\n"}{.data.channel\.backup}{"\n"}'
+```
+
+The second value is base64-encoded Secret data. The walkthrough records the Secret UID and verifies that the same retained Secret survives both pod and CR recovery.
+
+### 6. Pay Bob
 
 ```shell
 INVOICE="$(oc exec -n kiln-demo bob-0 -c lnd --   lncli --lnddir=/data --network=simnet addinvoice --amt=10000 |
@@ -151,7 +169,7 @@ oc exec -n kiln-demo alice-0 -c lnd -- lncli --lnddir=/data --network=simnet cha
 oc exec -n kiln-demo bob-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
 ```
 
-### 6. Prove pod recovery
+### 7. Prove pod recovery
 
 ```shell
 ALICE_KEY="$(oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identityPubkey}')"
@@ -165,7 +183,7 @@ oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identity
 
 The identity should match `$ALICE_KEY`.
 
-### 7. Prove CR recovery
+### 8. Prove CR recovery
 
 ```shell
 PVC=lnd-data-alice-0
@@ -178,15 +196,15 @@ oc apply -f manifests/lightning/alice.yaml
 oc wait -n kiln-demo lightningnode/alice --for=condition=Ready --timeout=300s
 ```
 
-The same PVC and Alice identity should return.
+The same PVC and Alice identity should return. The same `alice-scb` Secret UID should also remain present and non-empty.
 
-### 8. Run it all automatically
+### 9. Run it all automatically
 
 ```shell
 ./scripts/walkthrough.sh
 ```
 
-The script fails if the peer or channel CR does not reconcile, the payment does not complete, or Alice's identity, PVC, or Kiln-owned channel identity changes across recovery.
+The script fails if the peer or channel CR does not reconcile, the SCB is not published, the payment does not complete, or Alice's identity, PVC, retained SCB Secret, or Kiln-owned channel identity changes across recovery.
 
 ## OpenShift security note
 
@@ -231,4 +249,5 @@ This repo now follows the current Kiln runtime instead of the 2023 image set:
 - first-class `LightningPeer` and `LightningChannel` desired state
 - `LightningChannel.peerRef` as the single channel dependency reference
 - retained Lightning PVC lifecycle
+- retained LND Static Channel Backup publication
 - restricted RPC credential publication
