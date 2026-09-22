@@ -121,13 +121,7 @@ echo
 echo "==> Replacing Alice's pod"
 ALICE_POD="$(lightning_pod alice)"
 oc delete pod "$ALICE_POD" -n "$NAMESPACE" --wait=true
-for _ in {1..60}; do
-  ALICE_POD_AFTER="$(lightning_pod alice 2>/dev/null || true)"
-  [[ -n "$ALICE_POD_AFTER" && "$ALICE_POD_AFTER" != "$ALICE_POD" ]] && break
-  sleep 2
-done
-[[ -n "${ALICE_POD_AFTER:-}" ]] || { echo "Alice replacement pod did not appear" >&2; exit 1; }
-oc wait -n "$NAMESPACE" pod/"$ALICE_POD_AFTER" --for=condition=Ready --timeout=240s
+oc wait -n "$NAMESPACE" pod/"$ALICE_POD" --for=condition=Ready --timeout=240s
 oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=Ready --timeout=240s
 
 ALICE_KEY_AFTER_POD="$(lncli alice getinfo | jq -r .identity_pubkey)"
