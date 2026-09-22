@@ -1,0 +1,12 @@
+apiVersion: bitcoin.kiln-fired.github.io/v1alpha1
+kind: Seed
+metadata:
+  name: alice
+  namespace: kiln-demo
+spec:
+  secretName: alice-seed
+  network: simnet
+  import:
+    secretName: alice-seed-import
+    mnemonicKey: mnemonic
+    passphraseKey: passphrase
