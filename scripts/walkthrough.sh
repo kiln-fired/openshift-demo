@@ -3,6 +3,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-kiln-demo}"
 PVC="lnd-data-alice-0"
+SCB_SECRET="alice-scb"
 
 for cmd in oc jq; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
@@ -67,6 +68,23 @@ oc wait -n "$NAMESPACE" lightningchannel/alice-to-bob --for=condition=Ready --ti
 
 CHANNEL_POINT="$(oc get lightningchannel alice-to-bob -n "$NAMESPACE" -o jsonpath='{.status.channelPoint}')"
 [[ -n "$CHANNEL_POINT" ]] || { echo "LightningChannel did not report a channel point" >&2; exit 1; }
+
+echo "==> Waiting for Alice's retained static channel backup"
+oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=BackupReady --timeout=180s
+for _ in {1..60}; do
+  SCB_DATA="$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.channel\.backup}' 2>/dev/null || true)"
+  [[ -n "$SCB_DATA" ]] && break
+  sleep 2
+done
+[[ -n "$SCB_DATA" ]] || { echo "Alice SCB Secret is empty" >&2; exit 1; }
+SCB_UID="$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
+SCB_OWNERS="$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences}' 2>/dev/null || true)"
+[[ -z "$SCB_OWNERS" || "$SCB_OWNERS" == "<no value>" ]] || {
+  echo "Alice SCB Secret unexpectedly has an owner reference" >&2
+  exit 1
+}
+echo "Retained SCB Secret: $SCB_SECRET ($SCB_UID)"
+
 oc get lightningpeer,lightningchannel -n "$NAMESPACE"
 lncli alice listchannels
 
@@ -97,11 +115,29 @@ ALICE_KEY_AFTER_POD="$(lncli alice getinfo | jq -r .identity_pubkey)"
   exit 1
 }
 echo "Identity survived pod replacement: $ALICE_KEY_AFTER_POD"
+oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=BackupReady --timeout=180s
+[[ "$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$SCB_UID" ]] || {
+  echo "Alice SCB Secret changed after pod replacement" >&2
+  exit 1
+}
+[[ -n "$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.channel\.backup}')" ]] || {
+  echo "Alice SCB Secret became empty after pod replacement" >&2
+  exit 1
+}
 
 echo
 echo "==> Deleting Alice's LightningNode while retaining its PVC"
 oc delete -f manifests/lightning/alice.yaml --wait=true --timeout=240s
 oc get pvc "$PVC" -n "$NAMESPACE" >/dev/null
+oc get secret "$SCB_SECRET" -n "$NAMESPACE" >/dev/null
+[[ "$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$SCB_UID" ]] || {
+  echo "Alice SCB Secret changed during LightningNode deletion" >&2
+  exit 1
+}
+[[ -n "$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.channel\.backup}')" ]] || {
+  echo "Alice SCB Secret disappeared or became empty during LightningNode deletion" >&2
+  exit 1
+}
 PVC_UID_AFTER_DELETE="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
 [[ "$PVC_UID_AFTER_DELETE" == "$PVC_UID" ]] || {
   echo "Alice PVC changed during LightningNode deletion" >&2
@@ -111,6 +147,11 @@ PVC_UID_AFTER_DELETE="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadat
 echo "==> Recreating Alice's LightningNode"
 oc apply -f manifests/lightning/alice.yaml
 oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=Ready --timeout=300s
+oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=BackupReady --timeout=180s
+[[ "$(oc get secret "$SCB_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$SCB_UID" ]] || {
+  echo "Alice SCB Secret changed after LightningNode recreation" >&2
+  exit 1
+}
 
 ALICE_KEY_AFTER_CR="$(lncli alice getinfo | jq -r .identity_pubkey)"
 PVC_UID_AFTER_CR="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
@@ -138,5 +179,6 @@ echo "  Alice PVC UID:  $PVC_UID_AFTER_CR"
 echo "  Lightning peer CR: reconciled"
 echo "  Lightning channel CR: $CHANNEL_POINT_AFTER_CR"
 echo "  Lightning payment: successful"
+echo "  Static channel backup: retained in $SCB_SECRET"
 echo "  Pod recovery: successful"
 echo "  CR recovery: successful"
