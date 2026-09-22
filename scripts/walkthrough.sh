@@ -3,6 +3,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-kiln-demo}"
 SCB_SECRET="alice-scb"
+ALICE_SEED_SECRET="alice-seed"
 
 for cmd in oc jq; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
@@ -43,6 +44,29 @@ BOB_HOST="$(lightning_host bob)"
 PVC="$(oc get pvc -n "$NAMESPACE" -l 'app=lightningnode,lightningnode_cr=alice' -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "$PVC" ]] || { echo "Could not resolve Alice PVC" >&2; exit 1; }
 PVC_UID="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
+
+echo
+echo "==> Verifying retained Seed material"
+oc wait -n "$NAMESPACE" seed/alice --for=condition=Ready --timeout=60s
+ALICE_SEED_UID="$(oc get secret "$ALICE_SEED_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
+ALICE_SEED_OWNERS="$(oc get secret "$ALICE_SEED_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences}' 2>/dev/null || true)"
+[[ -z "$ALICE_SEED_OWNERS" || "$ALICE_SEED_OWNERS" == "<no value>" ]] || {
+  echo "Alice Seed Secret unexpectedly has an owner reference" >&2
+  exit 1
+}
+oc delete -f manifests/seeds/alice.yaml --wait=true
+oc get secret "$ALICE_SEED_SECRET" -n "$NAMESPACE" >/dev/null
+[[ "$(oc get secret "$ALICE_SEED_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$ALICE_SEED_UID" ]] || {
+  echo "Alice Seed Secret changed during Seed CR deletion" >&2
+  exit 1
+}
+oc apply -f manifests/seeds/alice.yaml
+oc wait -n "$NAMESPACE" seed/alice --for=condition=Ready --timeout=60s
+[[ "$(oc get secret "$ALICE_SEED_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$ALICE_SEED_UID" ]] || {
+  echo "Alice Seed Secret changed after Seed CR recreation" >&2
+  exit 1
+}
+echo "Retained Seed Secret survived Seed CR recovery: $ALICE_SEED_SECRET ($ALICE_SEED_UID)"
 
 echo
 echo "==> Alice wallet balance"
@@ -194,6 +218,7 @@ echo "  Alice PVC UID:  $PVC_UID_AFTER_CR"
 echo "  Lightning peer CR: reconciled"
 echo "  Lightning channel CR: $CHANNEL_POINT_AFTER_CR"
 echo "  Lightning payment: successful"
+echo "  Seed material: retained in $ALICE_SEED_SECRET"
 echo "  Static channel backup: retained in $SCB_SECRET"
 echo "  Pod recovery: successful"
 echo "  CR recovery: successful"
