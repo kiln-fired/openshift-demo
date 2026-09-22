@@ -2,19 +2,27 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-kiln-demo}"
-ALICE_RESOURCE="alice-lightning"
-BOB_RESOURCE="bob-lightning"
-PVC="lnd-data-${ALICE_RESOURCE}-0"
 SCB_SECRET="alice-scb"
 
 for cmd in oc jq; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
 done
 
+lightning_pod() {
+  local node="$1"
+  oc get pod -n "$NAMESPACE" -l "app=lightningnode,lightningnode_cr=$node" -o jsonpath='{.items[0].metadata.name}'
+}
+
+lightning_host() {
+  local node="$1"
+  oc get lightningnode "$node" -n "$NAMESPACE" -o jsonpath='{.status.rpcAddress}' | cut -d: -f1
+}
+
 lncli() {
   local node="$1"
   shift
-  local pod="${node}-lightning-0"
+  local pod
+  pod="$(lightning_pod "$node")"
   oc exec -n "$NAMESPACE" "$pod" -c lnd --     lncli --lnddir=/data --network=simnet "$@"
 }
 
@@ -31,6 +39,9 @@ oc get lightningnode bob -n "$NAMESPACE"   -o jsonpath='Bob:   {.status.runtime.
 
 ALICE_KEY="$(lncli alice getinfo | jq -r .identity_pubkey)"
 BOB_KEY="$(lncli bob getinfo | jq -r .identity_pubkey)"
+BOB_HOST="$(lightning_host bob)"
+PVC="$(oc get pvc -n "$NAMESPACE" -l 'app=lightningnode,lightningnode_cr=alice' -o jsonpath='{.items[0].metadata.name}')"
+[[ -n "$PVC" ]] || { echo "Could not resolve Alice PVC" >&2; exit 1; }
 PVC_UID="$(oc get pvc "$PVC" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
 
 echo
@@ -48,7 +59,7 @@ metadata:
 spec:
   nodeRef: alice
   pubkey: $BOB_KEY
-  address: $BOB_RESOURCE.$NAMESPACE.svc.cluster.local:9735
+  address: $BOB_HOST:9735
 EOF
 oc wait -n "$NAMESPACE" lightningpeer/bob --for=condition=Ready --timeout=180s
 oc get lightningpeer bob -n "$NAMESPACE"
@@ -108,8 +119,15 @@ lncli bob channelbalance
 
 echo
 echo "==> Replacing Alice's pod"
-oc delete pod "$ALICE_RESOURCE-0" -n "$NAMESPACE" --wait=true
-oc wait -n "$NAMESPACE" pod/"$ALICE_RESOURCE-0" --for=condition=Ready --timeout=240s
+ALICE_POD="$(lightning_pod alice)"
+oc delete pod "$ALICE_POD" -n "$NAMESPACE" --wait=true
+for _ in {1..60}; do
+  ALICE_POD_AFTER="$(lightning_pod alice 2>/dev/null || true)"
+  [[ -n "$ALICE_POD_AFTER" && "$ALICE_POD_AFTER" != "$ALICE_POD" ]] && break
+  sleep 2
+done
+[[ -n "${ALICE_POD_AFTER:-}" ]] || { echo "Alice replacement pod did not appear" >&2; exit 1; }
+oc wait -n "$NAMESPACE" pod/"$ALICE_POD_AFTER" --for=condition=Ready --timeout=240s
 oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=Ready --timeout=240s
 
 ALICE_KEY_AFTER_POD="$(lncli alice getinfo | jq -r .identity_pubkey)"
