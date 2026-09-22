@@ -2,7 +2,7 @@
 
 A repeatable demo of [Kiln](https://github.com/kiln-fired/kiln-operator) running Bitcoin and Lightning infrastructure on Red Hat OpenShift.
 
-The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. The walkthrough then declares Alice-to-Bob connectivity with a `LightningPeer`, declares the funded relationship with a `LightningChannel`, waits for Alice's retained Static Channel Backup (SCB), pays Bob through LND, replaces Alice's pod, and finally deletes/recreates Alice's `LightningNode` while proving that her identity, PVC, retained SCB Secret, and Kiln-owned channel survive.
+The demo provisions one persistent btcd `BitcoinNode` on simnet and two persistent LND `LightningNode` resources, Alice and Bob. Fresh Kiln resources now create type-qualified Kubernetes children (`btcd-bitcoin`, `alice-lightning`, and `bob-lightning`) so different CR kinds can safely share a name. The walkthrough then declares Alice-to-Bob connectivity with a `LightningPeer`, declares the funded relationship with a `LightningChannel`, waits for Alice's retained Static Channel Backup (SCB), pays Bob through LND, replaces Alice's pod, and finally deletes/recreates Alice's `LightningNode` while proving that her identity, PVC, retained SCB Secret, and Kiln-owned channel survive.
 
 > [!WARNING]
 > This is a development demo. It uses simnet, demo passwords, a known Alice seed, and automatic block generation. Never reuse these credentials or seed material for real funds.
@@ -48,6 +48,7 @@ The demo provisions one persistent btcd `BitcoinNode` on simnet and two persiste
 - immediate-resource API references: `LightningNode → BitcoinNode →` runtime dependency, `LightningPeer → LightningNode`, and `LightningChannel → LightningPeer`
 - managed Lightning network/RPC configuration derived from `bitcoinConnection.nodeRef`
 - persistent Bitcoin and Lightning storage
+- type-qualified child resources such as `btcd-bitcoin`, `alice-lightning`, and `bob-lightning`, avoiding cross-kind name collisions
 - authenticated LND runtime readiness
 - restricted LND RPC credential publication
 - Lightning identity survival across pod replacement
@@ -102,7 +103,7 @@ Look at `status.phase`, `status.rpcAddress`, `status.rpcSecretName`, and `status
 ### 2. Show Alice's simnet balance
 
 ```shell
-oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet walletbalance
+oc exec -n kiln-demo alice-lightning-0 -c lnd --   lncli --lnddir=/data --network=simnet walletbalance
 ```
 
 The demo directs initial simnet mining rewards to an address derived from Alice's development-only seed. btcd generates 400 blocks at startup and then a block every 10 seconds so channel transactions confirm during the demo.
@@ -117,7 +118,7 @@ kind: LightningPeer
 spec:
   nodeRef: alice
   pubkey: <Bob identity pubkey>
-  address: bob.kiln-demo.svc.cluster.local:9735
+  address: bob-lightning.kiln-demo.svc.cluster.local:9735
 ```
 
 Kiln observes LND and reconciles the connection. The demo waits for `LightningPeer.Ready=True`.
@@ -156,17 +157,17 @@ The second value is base64-encoded Secret data. The walkthrough records the Secr
 ### 6. Pay Bob
 
 ```shell
-INVOICE="$(oc exec -n kiln-demo bob-0 -c lnd --   lncli --lnddir=/data --network=simnet addinvoice --amt=10000 |
+INVOICE="$(oc exec -n kiln-demo bob-lightning-0 -c lnd --   lncli --lnddir=/data --network=simnet addinvoice --amt=10000 |
   jq -r .payment_request)"
 
-oc exec -n kiln-demo alice-0 -c lnd --   lncli --lnddir=/data --network=simnet payinvoice --force "$INVOICE"
+oc exec -n kiln-demo alice-lightning-0 -c lnd --   lncli --lnddir=/data --network=simnet payinvoice --force "$INVOICE"
 ```
 
 Show both channel balances:
 
 ```shell
-oc exec -n kiln-demo alice-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
-oc exec -n kiln-demo bob-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
+oc exec -n kiln-demo alice-lightning-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
+oc exec -n kiln-demo bob-lightning-0 -c lnd -- lncli --lnddir=/data --network=simnet channelbalance
 ```
 
 ### 7. Prove pod recovery
@@ -174,8 +175,8 @@ oc exec -n kiln-demo bob-0 -c lnd -- lncli --lnddir=/data --network=simnet chann
 ```shell
 ALICE_KEY="$(oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identityPubkey}')"
 
-oc delete pod alice-0 -n kiln-demo
-oc wait -n kiln-demo pod/alice-0 --for=condition=Ready --timeout=180s
+oc delete pod alice-lightning-0 -n kiln-demo
+oc wait -n kiln-demo pod/alice-lightning-0 --for=condition=Ready --timeout=180s
 oc wait -n kiln-demo lightningnode/alice --for=condition=Ready --timeout=180s
 
 oc get lightningnode alice -n kiln-demo   -o jsonpath='{.status.runtime.identityPubkey}{"\n"}'
@@ -186,7 +187,7 @@ The identity should match `$ALICE_KEY`.
 ### 8. Prove CR recovery
 
 ```shell
-PVC=lnd-data-alice-0
+PVC=lnd-data-alice-lightning-0
 oc get pvc "$PVC" -n kiln-demo -o jsonpath='{.metadata.uid}{"\n"}'
 
 oc delete -f manifests/lightning/alice.yaml --wait=true
