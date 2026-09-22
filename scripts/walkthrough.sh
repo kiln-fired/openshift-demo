@@ -2,7 +2,9 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-kiln-demo}"
-PVC="lnd-data-alice-0"
+ALICE_RESOURCE="alice-lightning"
+BOB_RESOURCE="bob-lightning"
+PVC="lnd-data-${ALICE_RESOURCE}-0"
 SCB_SECRET="alice-scb"
 
 for cmd in oc jq; do
@@ -12,7 +14,8 @@ done
 lncli() {
   local node="$1"
   shift
-  oc exec -n "$NAMESPACE" "$node-0" -c lnd --     lncli --lnddir=/data --network=simnet "$@"
+  local pod="${node}-lightning-0"
+  oc exec -n "$NAMESPACE" "$pod" -c lnd --     lncli --lnddir=/data --network=simnet "$@"
 }
 
 echo "==> Checking readiness"
@@ -45,7 +48,7 @@ metadata:
 spec:
   nodeRef: alice
   pubkey: $BOB_KEY
-  address: bob.$NAMESPACE.svc.cluster.local:9735
+  address: $BOB_RESOURCE.$NAMESPACE.svc.cluster.local:9735
 EOF
 oc wait -n "$NAMESPACE" lightningpeer/bob --for=condition=Ready --timeout=180s
 oc get lightningpeer bob -n "$NAMESPACE"
@@ -105,8 +108,8 @@ lncli bob channelbalance
 
 echo
 echo "==> Replacing Alice's pod"
-oc delete pod alice-0 -n "$NAMESPACE" --wait=true
-oc wait -n "$NAMESPACE" pod/alice-0 --for=condition=Ready --timeout=240s
+oc delete pod "$ALICE_RESOURCE-0" -n "$NAMESPACE" --wait=true
+oc wait -n "$NAMESPACE" pod/"$ALICE_RESOURCE-0" --for=condition=Ready --timeout=240s
 oc wait -n "$NAMESPACE" lightningnode/alice --for=condition=Ready --timeout=240s
 
 ALICE_KEY_AFTER_POD="$(lncli alice getinfo | jq -r .identity_pubkey)"
